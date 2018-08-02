@@ -1,0 +1,36 @@
+{
+  "id": "nodebb-plugin-recent-sorted",
+  "name": "RecentSorted",
+  "description": "NodeBB Recent Sorted Plugin",
+  "url": "https://github.com/revir/nodebb-plugin-recent-sorted",
+  "library": "library.js",
+  "hooks": [
+    {
+			"hook": "static:app.load", "method": "init"
+		},
+    {
+			"hook": "action:post.upvote", "method": "onUpvote"
+		},
+		{
+			"hook": "action:post.unvote", "method": "onUnvote"
+		},
+		{
+			"hook": "action:post.downvote", "method": "onDownvote"
+		},
+    {
+      "hook": "action:topic.save", "method": "onSaveTopic"
+    },
+    {
+      "hook": "action:topic.purge", "method": "onPurgeTopic"
+    },
+    {
+      "hook": "action:post.save", "method": "onSavePost"
+    },
+    {
+      "hook": "action:post.purge", "method": "onPurgePost"
+    },
+    {
+      "hook": "action:post.delete", "method": "onDeletePost"
+    }
+  ]
+}
