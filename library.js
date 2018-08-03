@@ -14,15 +14,28 @@ var cronJob = require.main.require('cron').job;
   theme.init = function(params, callback) {
     var cronString = '05,35 * * * *';
     function doAllTopics () {
-			winston.verbose('[recent-sorted] job of compute topic scores started.');
+			winston.info('[recent-sorted] job of compute topic scores started.');
 			db.getSortedSetRevRange('topics:recent', 0, -1, function(err, tids){
         if (err) return winston.error(err);
-        async.each(tids, function(tid) {
-          async.series([
-            async.apply(computeTopicKarmaOfCreated, tid),
-            async.apply(computeTopicScoreWithTid, tid),
-          ]);
-        });
+        async.waterfall([
+          async.apply(db.getObject, 'settings:recent-sorted'),
+          function(setting, next) {
+            if (setting && setting.inited) {
+              winston.verbose('[recent-sorted] has already inited, ignore init topics Karma.');
+              async.each(tids, async.apply(computeTopicScoreWithTid), next);
+            } else {
+              winston.info('[recent-sorted] not inited.');
+              async.each(tids, async.apply(initTopicKarmaByTid), function(err) {
+                if (err) return next(err);
+                winston.info('[recent-sorted] has successfully inited.');
+                db.setObject('settings:recent-sorted', {
+                  inited: true
+                }, next);
+              });
+            }
+          }
+        ])
+
       });
 		}
     cronJob(cronString, doAllTopics, null, true);
@@ -146,31 +159,50 @@ var cronJob = require.main.require('cron').job;
     ], callback);
   }
 
-  function computeTopicKarmaOfCreated(topicData, callback) {
-    var topic = topicData;
-
+  function initTopicKarmaByTid(tid, callback) {
+    var topic, info;
     async.waterfall([
-      function(next) {
-        if (typeof topic === 'number' || typeof topic === 'string') {
-          db.getObject('topic:'+topic, function(err, data) {
-            topic = data;
-            next(err);
-          });
-        } else {
-          next();
-        }
+      async.apply(db.getObject, 'topic:'+tid),
+      function(data, next) {
+        topic = data;
+        topic.sKarma = 0; // initial value.
+        computeTopicKarmaOfCreated(topic, next);
       },
+      function(next) {
+        async.parallel({
+          upvoterUids: async.apply(db.getSetMembers, 'pid:'+topic.mainPid+':upvote'),
+          downvoterUids: async.apply(db.getSetMembers, 'pid:'+topic.mainPid+':downvote')
+        }, next);
+      },
+      function(result, next) {
+        async.series([
+          function(next) {
+            async.eachSeries(result.upvoterUids, function(uid, next) {
+              handleTopicOnVote(uid, 'upvote', 'unvote', topic, next);
+            }, next)
+          },
+          function(next) {
+            async.eachSeries(result.downvoterUids, function(uid, next) {
+              handleTopicOnVote(uid, 'downvote', 'unvote', topic, next);
+            }, next)
+          }
+        ], next);
+      }
+    ], callback);
+  }
+
+  function computeTopicKarmaOfCreated(topic, callback) {
+    async.waterfall([
       function(next) {
         db.getObject('user:'+topic.uid, next);
       },
 			function (user, next) {   // calculate sKarma;
 				if (!user) return next();
-
 				if (!topic.sKarma) topic.sKarma = 0;
 
         // if user has negative reputation...
         topic.sKarma = user.reputation * 0.1 / 2;
-        // winston.verbose(`[recent-sorted] topic(${topic.tid}) by user(${topic.uid}), sKarma(${topic.sKarma})`);
+        winston.verbose(`[recent-sorted] create topic(${topic.tid}) by user(${topic.uid}), sKarma(${topic.sKarma})`);
 
 				Topics.setTopicField(topic.tid, 'sKarma', topic.sKarma, next);
 			}
@@ -192,7 +224,7 @@ var cronJob = require.main.require('cron').job;
 		});
 	});
 
-	function handleTopicOnVote(uid, hook, current, topic) {
+	function handleTopicOnVote(uid, hook, current, topic, callback) {
 		if (!uid) return; // not login
 
 		async.waterfall([
@@ -206,25 +238,25 @@ var cronJob = require.main.require('cron').job;
 				if (hook === 'unvote') {
 					if (current === 'upvote') {
 						topic.sKarma -= sKarma;
-						winston.verbose(`[recent-sorted] unvote upvoted tid:${topic.tid}, sKarma: -${sKarma}`);
+						winston.verbose(`[recent-sorted] user(${user.username}, ${uid}) unvote upvoted tid:${topic.tid}, sKarma: -${sKarma}`);
 					} else {
 						topic.sKarma += sKarma;
-						winston.verbose(`[recent-sorted] unvote downvoted tid:${topic.tid}, sKarma: +${sKarma}`);
+						winston.verbose(`[recent-sorted] user(${user.username}, ${uid}) unvote downvoted tid:${topic.tid}, sKarma: +${sKarma}`);
 					}
 				} else {
 					if (current === 'upvote') {
 						// user has upvoted, clicks downvote;
 						topic.sKarma -= 2*sKarma;
-						winston.verbose(`[recent-sorted] upvote -> downvote tid:${topic.tid}, sKarma: -${sKarma} * 2`);
+						winston.verbose(`[recent-sorted] user(${user.username}, ${uid}) upvote -> downvote tid:${topic.tid}, sKarma: -${sKarma} * 2`);
 					} else if (current === 'downvote') {
 						// user has downvoted, clicks upvote;
 						topic.sKarma += 2*sKarma;
-						winston.verbose(`[recent-sorted] downvote -> upvote tid:${topic.tid}, sKarma: +${sKarma} * 2`);
+						winston.verbose(`[recent-sorted] user(${user.username}, ${uid}) downvote -> upvote tid:${topic.tid}, sKarma: +${sKarma} * 2`);
 					} else if (hook === 'upvote'){
-						winston.verbose(`[recent-sorted] upvote tid:${topic.tid}, sKarma: +${sKarma}`);
+						winston.verbose(`[recent-sorted] user(${user.username}, ${uid}) upvote tid:${topic.tid}, sKarma: +${sKarma}`);
 						topic.sKarma += sKarma;
 					} else {
-						winston.verbose(`[recent-sorted] downvote tid:${topic.tid}, sKarma: -${sKarma}`);
+						winston.verbose(`[recent-sorted] user(${user.username}, ${uid}) downvote tid:${topic.tid}, sKarma: -${sKarma}`);
 						topic.sKarma -= sKarma;
 					}
 				}
@@ -254,7 +286,7 @@ var cronJob = require.main.require('cron').job;
 				}
 				computeTopicScore(topic, next);
 			}
-		]);
+		], callback);
 	}
 
 	function funcOnVote(hook, data) {
