@@ -1,6 +1,6 @@
 {
   "name": "nodebb-plugin-recent-sorted",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "NodeBB Recent Sorted Plugin",
   "main": "library.js",
   "scripts": {
